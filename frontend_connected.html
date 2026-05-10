@@ -1,0 +1,1337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>ED Triage XAI — Clinical Dashboard</title>
+<!-- Fonts loaded async so they never block boot screen rendering -->
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="stylesheet" media="print" onload="this.media='all'" href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;1,400&family=DM+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap"/>
+<!-- React/ReactDOM must be blocking — app script below depends on them -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<!-- NOTE: Recharts removed — all charts in this app are pure SVG (SvgGroupedBar / RocPanel).
+     The Recharts UMD bundle was ~400KB blocking with zero usage. -->
+<style>
+/* ═══════════════ TOKENS ═══════════════ */
+:root{
+  --bg0:#07090f; --bg1:#0d1117; --bg2:#131822; --bg3:#1a2030;
+  --bg4:#212840; --line:rgba(255,255,255,.07); --line2:rgba(255,255,255,.13);
+  --muted:#3d4f6e; --dim:#6b7fa3; --soft:#9baec8; --body:#ccd6f6; --bright:#e8eeff;
+  --cyan:#38bdf8; --cyan2:rgba(56,189,248,.12); --cyan3:rgba(56,189,248,.25);
+  --red:#f87171;  --red2:rgba(248,113,113,.12);  --red3:rgba(248,113,113,.3);
+  --amber:#fbbf24;--amb2:rgba(251,191,36,.12);   --amb3:rgba(251,191,36,.28);
+  --green:#34d399;--grn2:rgba(52,211,153,.12);   --grn3:rgba(52,211,153,.28);
+  --vio:#a78bfa;  --vio2:rgba(167,139,250,.12);
+  --serif:'Playfair Display',serif;
+  --sans:'Plus Jakarta Sans',sans-serif;
+  --mono:'DM Mono',monospace;
+  --r8:8px; --r12:12px; --r16:16px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{height:100%}
+body{font-family:var(--sans);background:var(--bg0);color:var(--body);min-height:100vh;overflow-x:hidden}
+body::before{
+  content:'';position:fixed;inset:0;z-index:0;pointer-events:none;
+  background:
+    radial-gradient(ellipse 70% 50% at 15% 5%,rgba(56,189,248,.055) 0%,transparent 55%),
+    radial-gradient(ellipse 50% 40% at 85% 95%,rgba(167,139,250,.045) 0%,transparent 55%),
+    linear-gradient(rgba(255,255,255,.018) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(255,255,255,.018) 1px,transparent 1px);
+  background-size:auto,auto,52px 52px,52px 52px;
+}
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--muted);border-radius:99px}
+
+/* ── BOOT SCREEN ── */
+#boot{
+  position:fixed;inset:0;z-index:9999;
+  background:var(--bg0);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;
+  transition:opacity .5s;
+}
+#boot.hidden{opacity:0;pointer-events:none}
+.boot-logo{font-family:Georgia,serif;font-size:28px;color:#e8eeff;text-align:center;font-weight:600}
+.boot-sub{font-size:11px;color:#9baec8;text-align:center;max-width:320px;line-height:1.6}
+.boot-steps{display:flex;flex-direction:column;gap:8px;width:280px;margin-top:8px}
+.boot-step{
+  display:flex;align-items:center;gap:10px;
+  background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.18);
+  border-radius:8px;padding:9px 13px;
+  font-size:12px;color:#9baec8;
+  transition:all .3s;
+}
+.boot-step.done{border-color:rgba(52,211,153,.4);color:#34d399}
+.boot-step.active{border-color:rgba(56,189,248,.4);color:#38bdf8}
+.boot-step.fail{border-color:rgba(248,113,113,.4);color:#f87171}
+.boot-step-ico{font-size:13px;width:18px;text-align:center;flex-shrink:0}
+.boot-bar-wrap{width:280px;height:3px;background:rgba(255,255,255,.06);border-radius:99px;overflow:hidden}
+.boot-bar{height:100%;background:var(--cyan);border-radius:99px;transition:width .4s}
+.boot-err{
+  max-width:320px;padding:12px 16px;border-radius:var(--r8);
+  background:var(--red2);border:1px solid var(--red3);
+  font-size:11px;color:#fca5a5;text-align:center;line-height:1.6;display:none;
+}
+.boot-err.show{display:block}
+.boot-retry{
+  margin-top:8px;padding:8px 20px;border-radius:var(--r8);border:1px solid var(--red3);
+  background:transparent;color:#fca5a5;font-family:var(--sans);font-size:12px;
+  cursor:pointer;transition:all .2s;display:none;
+}
+.boot-retry.show{display:inline-block}
+.boot-retry:hover{background:var(--red2)}
+
+/* ── LAYOUT ── */
+.shell{position:relative;z-index:1;display:flex;min-height:100vh}
+.sidebar{
+  width:224px;flex-shrink:0;background:var(--bg1);
+  border-right:1px solid var(--line);
+  display:flex;flex-direction:column;
+  position:sticky;top:0;height:100vh;overflow-y:auto;
+}
+.brand{padding:20px 18px 16px;border-bottom:1px solid var(--line)}
+.brand-mark{display:flex;align-items:center;gap:9px;margin-bottom:8px}
+.brand-hex{
+  width:32px;height:32px;border-radius:var(--r8);
+  background:linear-gradient(135deg,var(--cyan),#0284c7);
+  display:flex;align-items:center;justify-content:center;
+  font-size:14px;flex-shrink:0;
+}
+.brand-name{font-family:var(--serif);font-size:15px;color:var(--bright);line-height:1.2}
+.brand-sub{font-size:10px;color:var(--dim);line-height:1.55;margin-top:6px}
+.nav-sec{padding:12px 0 2px}
+.nav-sec-lbl{font-size:9px;text-transform:uppercase;letter-spacing:2px;color:var(--muted);font-weight:600;padding:0 18px 6px}
+.nav-item{
+  display:flex;align-items:center;gap:10px;padding:8px 18px;
+  cursor:pointer;font-size:12.5px;font-weight:500;color:var(--dim);
+  transition:all .15s;border-left:2px solid transparent;
+}
+.nav-item:hover{color:var(--body);background:rgba(255,255,255,.03)}
+.nav-item.on{color:var(--cyan);border-left-color:var(--cyan);background:var(--cyan2)}
+.nav-ico{font-size:13px;width:20px;text-align:center;flex-shrink:0}
+.sidebar-foot{margin-top:auto;padding:14px 18px;border-top:1px solid var(--line)}
+.api-card{border:1px solid var(--line2);border-radius:var(--r8);padding:9px 12px;background:rgba(255,255,255,.03)}
+.api-row{display:flex;align-items:center;gap:7px}
+.api-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.api-dot.live{background:var(--green);box-shadow:0 0 6px var(--green)}
+.api-dot.dead{background:var(--red)}
+.api-dot.spin{background:var(--amber);animation:blink 1s ease-in-out infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.api-lbl{font-size:11px;font-weight:600}
+.api-url{font-size:9px;color:var(--muted);font-family:var(--mono);margin-top:3px}
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+.topbar{
+  height:54px;display:flex;align-items:center;justify-content:space-between;
+  padding:0 26px;
+  background:rgba(7,9,15,.75);backdrop-filter:blur(18px);
+  border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20;
+}
+.topbar-l{display:flex;align-items:center;gap:12px}
+.page-title{font-family:var(--serif);font-size:19px;font-style:italic;color:var(--bright)}
+.live-chip{
+  display:flex;align-items:center;gap:5px;
+  background:var(--grn2);border:1px solid var(--grn3);
+  border-radius:99px;padding:3px 10px;
+  font-size:10px;color:var(--green);font-weight:600;letter-spacing:.3px;
+}
+.live-chip.off{background:var(--red2);border-color:var(--red3);color:var(--red)}
+.live-chip-dot{width:5px;height:5px;border-radius:50%;background:var(--green);animation:blink 2s infinite}
+.live-chip.off .live-chip-dot{background:var(--red);animation:none}
+.topbar-r{display:flex;align-items:center;gap:9px}
+.model-sel-wrap{
+  display:flex;align-items:center;gap:7px;
+  background:var(--bg3);border:1px solid var(--line2);
+  border-radius:var(--r8);padding:5px 10px;
+}
+.model-sel-wrap label{font-size:9px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:1px}
+.model-sel-wrap select{background:transparent;border:none;color:var(--body);font-family:var(--sans);font-size:12px;font-weight:500;outline:none;cursor:pointer}
+.model-sel-wrap select option{background:var(--bg2)}
+.page{flex:1;padding:22px 26px;overflow-y:auto}
+
+/* ── CARDS ── */
+.card{background:var(--bg2);border:1px solid var(--line);border-radius:var(--r16);padding:18px}
+.card-lbl{
+  font-size:9px;text-transform:uppercase;letter-spacing:2px;
+  color:var(--dim);font-weight:700;margin-bottom:14px;
+  display:flex;align-items:center;gap:7px;
+}
+.card-lbl-bar{width:2px;height:12px;border-radius:1px;flex-shrink:0}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.g3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.tile{background:var(--bg2);border:1px solid var(--line);border-radius:var(--r12);padding:14px 16px;position:relative;overflow:hidden}
+.tile-accent{position:absolute;top:0;left:0;right:0;height:2px;border-radius:var(--r12) var(--r12) 0 0}
+.tile-lbl{font-size:9px;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted);font-weight:600;margin-bottom:6px}
+.tile-val{font-family:var(--serif);font-size:28px;color:var(--bright);line-height:1}
+.tile-sub{font-size:10px;color:var(--dim);margin-top:5px}
+
+/* ── FORM ── */
+.sec-head{font-size:9px;text-transform:uppercase;letter-spacing:2px;color:var(--cyan);font-weight:700;margin-bottom:9px;padding-bottom:6px;border-bottom:1px solid var(--cyan2)}
+.fg{display:flex;flex-direction:column;gap:3px}
+.fg label{font-size:10px;color:var(--soft);font-weight:500}
+.fg input,.fg select{background:rgba(255,255,255,.04);border:1px solid var(--line2);border-radius:var(--r8);padding:7px 10px;color:var(--body);font-family:var(--sans);font-size:12px;outline:none;transition:border-color .18s,background .18s;width:100%}
+.fg input:focus,.fg select:focus{border-color:var(--cyan);background:var(--cyan2)}
+.fg select option{background:var(--bg2)}
+.fg input[data-warn]{border-color:var(--red)!important}
+.fgrid{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.fsec{margin-bottom:15px}
+
+/* ── BUTTONS ── */
+.btn-run{width:100%;padding:11px;border-radius:var(--r12);border:none;background:linear-gradient(135deg,var(--cyan),#0369a1);color:#fff;font-family:var(--sans);font-size:13px;font-weight:700;cursor:pointer;letter-spacing:.3px;transition:all .2s;display:flex;align-items:center;justify-content:center;gap:8px}
+.btn-run:hover{transform:translateY(-1px);box-shadow:0 10px 30px rgba(56,189,248,.28)}
+.btn-run:active{transform:none}
+.btn-run:disabled{opacity:.5;cursor:not-allowed;transform:none;box-shadow:none}
+.btn-xs{padding:5px 12px;border-radius:6px;border:1px solid var(--line2);background:transparent;color:var(--dim);font-family:var(--sans);font-size:11px;font-weight:600;cursor:pointer;transition:all .15s}
+.btn-xs:hover{border-color:var(--cyan);color:var(--cyan)}
+.btn-xs.sel{border-color:var(--cyan);color:var(--cyan);background:var(--cyan2)}
+.btn-ov{flex:1;padding:7px 4px;border-radius:7px;border:1px solid;font-family:var(--sans);font-size:11px;font-weight:700;cursor:pointer;text-align:center;transition:all .15s}
+.btn-ov.h{background:var(--red2);border-color:var(--red3);color:#fca5a5}
+.btn-ov.m{background:var(--amb2);border-color:var(--amb3);color:#fcd34d}
+.btn-ov.l{background:var(--grn2);border-color:var(--grn3);color:#6ee7b7}
+.btn-ov:hover{transform:translateY(-1px)}
+
+/* ── PREDICTION HERO ── */
+.pred-hero{border-radius:var(--r16);padding:22px 20px;text-align:center;position:relative;overflow:hidden}
+.pred-hero.H{background:var(--red2);border:1px solid var(--red3)}
+.pred-hero.M{background:var(--amb2);border:1px solid var(--amb3)}
+.pred-hero.L{background:var(--grn2);border:1px solid var(--grn3)}
+.pred-sub{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--soft);margin-bottom:5px}
+.pred-word{font-family:var(--serif);font-size:52px;line-height:1;font-style:italic}
+.pred-hero.H .pred-word{color:var(--red)}.pred-hero.M .pred-word{color:var(--amber)}.pred-hero.L .pred-word{color:var(--green)}
+.pred-conf{font-size:12px;color:var(--soft);margin-top:7px}
+.pred-conf strong{color:var(--body);font-weight:600}
+.pred-via{font-size:9px;color:var(--muted);margin-top:3px;font-family:var(--mono)}
+.prob-row{margin-bottom:6px}
+.prob-hd{display:flex;justify-content:space-between;font-size:10px;color:var(--dim);margin-bottom:3px}
+.prob-hd span:last-child{font-family:var(--mono);color:var(--body)}
+.prob-track{height:5px;background:rgba(255,255,255,.06);border-radius:99px;overflow:hidden}
+.prob-fill{height:100%;border-radius:99px;transition:width .65s cubic-bezier(.4,0,.2,1)}
+
+/* ── FLAGS ── */
+.flag{display:flex;align-items:flex-start;gap:9px;padding:9px 12px;border-radius:var(--r8);margin-bottom:7px;border:1px solid}
+.flag.critical{background:var(--red2);border-color:var(--red3)}
+.flag.warning{background:var(--amb2);border-color:var(--amb3)}
+.flag.info{background:var(--cyan2);border-color:var(--cyan3)}
+.flag-ico{font-size:13px;margin-top:1px;flex-shrink:0}
+.flag-title{font-size:11px;font-weight:700}
+.flag.critical .flag-title{color:#fca5a5}
+.flag.warning  .flag-title{color:#fcd34d}
+.flag.info     .flag-title{color:var(--cyan)}
+.flag-detail{font-size:10px;color:var(--dim);margin-top:2px;line-height:1.45}
+
+/* ── SHAP WATERFALL ── */
+.shap-row{display:flex;align-items:center;gap:7px;margin-bottom:6px}
+.shap-name{font-size:10px;color:var(--dim);width:120px;flex-shrink:0;text-align:right;font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.shap-track{flex:1;height:14px;position:relative}
+.shap-axis{position:absolute;left:50%;top:0;bottom:0;width:1px;background:rgba(255,255,255,.1)}
+.shap-bar{height:10px;border-radius:3px;position:absolute;top:2px;transition:width .55s cubic-bezier(.4,0,.2,1)}
+.shap-bar.pos{background:linear-gradient(90deg,var(--red),rgba(248,113,113,.4));left:50%}
+.shap-bar.neg{background:linear-gradient(270deg,var(--cyan),rgba(56,189,248,.4));right:50%}
+.shap-val{font-size:9px;font-family:var(--mono);color:var(--muted);width:52px;flex-shrink:0}
+
+/* ── TABS ── */
+.tabs{display:flex;border-bottom:1px solid var(--line);margin-bottom:16px}
+.tab{padding:9px 15px;font-size:11px;font-weight:600;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;transition:all .15s;text-transform:uppercase;letter-spacing:.8px}
+.tab:hover{color:var(--body)}.tab.on{color:var(--cyan);border-bottom-color:var(--cyan)}
+
+/* ── MODEL CARDS ── */
+.mdl-card{background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:var(--r12);padding:14px;position:relative;overflow:hidden;transition:border-color .2s}
+.mdl-card.sel{border-color:var(--cyan);box-shadow:0 0 0 1px rgba(56,189,248,.15)}
+.mdl-top{position:absolute;top:0;left:0;right:0;height:3px;border-radius:var(--r12) var(--r12) 0 0}
+.mdl-name{font-size:13px;font-weight:600;color:var(--bright);margin-bottom:10px}
+.mrow{display:flex;justify-content:space-between;margin-bottom:5px}
+.mkey{font-size:10px;color:var(--muted)}.mval{font-size:10px;font-family:var(--mono);color:var(--body);font-weight:500}
+
+/* ── FEAT BAR ── */
+.feat-row{display:flex;align-items:center;gap:8px;margin-bottom:7px}
+.feat-name{font-size:10px;color:var(--soft);font-family:var(--mono);width:145px;flex-shrink:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.feat-track{flex:1;height:8px;background:rgba(255,255,255,.05);border-radius:99px;overflow:hidden}
+.feat-fill{height:100%;border-radius:99px}
+.feat-val{font-size:9px;font-family:var(--mono);color:var(--muted);width:46px;text-align:right}
+
+/* ── CM ── */
+.cm-wrap{display:inline-grid;grid-template-columns:repeat(4,56px);gap:3px}
+.cm-cell{height:44px;display:flex;align-items:center;justify-content:center;font-size:11px;border-radius:5px;font-family:var(--mono)}
+.cm-hd{background:transparent;color:var(--muted);font-size:9px;font-weight:600}
+.cm-d{background:rgba(56,189,248,.2);color:var(--bright);font-weight:700}
+.cm-o{background:rgba(248,113,113,.12);color:#fca5a5}
+
+/* ── DATA TABLE ── */
+.tbl-wrap{overflow-x:auto;border-radius:var(--r8);border:1px solid var(--line)}
+.dtbl{width:100%;border-collapse:collapse;font-size:11px}
+.dtbl th{background:rgba(255,255,255,.04);color:var(--cyan);padding:9px 10px;text-align:left;font-size:9px;text-transform:uppercase;letter-spacing:1.2px;font-weight:600;border-bottom:1px solid var(--line2);white-space:nowrap}
+.dtbl td{padding:8px 10px;border-bottom:1px solid rgba(255,255,255,.025);color:var(--dim);font-family:var(--mono);white-space:nowrap;font-size:10.5px}
+.dtbl tr:hover td{background:rgba(255,255,255,.02)}
+.bg-h{background:var(--red2);color:#fca5a5;border-radius:4px;padding:2px 8px;font-size:9px;font-weight:700}
+.bg-m{background:var(--amb2);color:#fcd34d;border-radius:4px;padding:2px 8px;font-size:9px;font-weight:700}
+.bg-l{background:var(--grn2);color:#6ee7b7;border-radius:4px;padding:2px 8px;font-size:9px;font-weight:700}
+
+/* ── MISC ── */
+.spinner{width:28px;height:28px;border:3px solid rgba(56,189,248,.15);border-top-color:var(--cyan);border-radius:50%;animation:spin .7s linear infinite;margin:auto}
+@keyframes spin{to{transform:rotate(360deg)}}
+.c-box{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:36px}
+.empty-ico{font-size:32px;opacity:.3}
+.note-box{border-radius:var(--r8);padding:9px 12px;margin-bottom:8px;border:1px solid;font-size:11px;line-height:1.55}
+.note-box.uncertainty{background:var(--amb2);border-color:var(--amb3)}
+.note-box.alert{background:var(--red2);border-color:var(--red3)}
+.note-box.explanation{background:var(--cyan2);border-color:var(--cyan3)}
+.disc{margin-top:12px;padding:9px 12px;border-radius:var(--r8);background:rgba(255,255,255,.03);border:1px solid var(--line);font-size:10px;color:var(--muted);line-height:1.55}
+.ov-area{margin-top:12px}
+.ov-note{width:100%;background:rgba(255,255,255,.04);border:1px solid var(--line2);border-radius:var(--r8);padding:7px 10px;color:var(--body);font-family:var(--sans);font-size:11px;resize:vertical;outline:none;min-height:48px;margin-top:8px}
+.ov-note:focus{border-color:var(--cyan)}
+.ov-done{margin-top:9px;padding:8px 12px;background:var(--grn2);border-radius:7px;border:1px solid var(--grn3);font-size:11px;color:#6ee7b7}
+.toast-stack{position:fixed;bottom:22px;right:22px;z-index:999;display:flex;flex-direction:column;gap:7px}
+.toast{background:var(--bg3);border:1px solid var(--line2);border-radius:var(--r12);padding:11px 16px;font-size:12px;display:flex;align-items:center;gap:9px;box-shadow:0 16px 48px rgba(0,0,0,.6);min-width:250px;animation:t-in .28s ease}
+@keyframes t-in{from{transform:translateY(14px);opacity:0}to{transform:translateY(0);opacity:1}}
+.toast.s{border-color:var(--grn3)}.toast.e{border-color:var(--red3)}.toast.i{border-color:var(--cyan3)}
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════
+     BOOT SCREEN — shown while backend is starting up
+     Fades out once /api/health returns {status:'ok'}
+     ═══════════════════════════════════════════════════════ -->
+<div id="boot">
+  <div class="boot-logo">🏥 ED Triage XAI</div>
+  <div class="boot-sub">An Explainable AI Web System for Emergency Patient Prioritisation<br>Connecting to Flask backend…</div>
+  <div class="boot-steps">
+    <div class="boot-step active" id="bs-mw"><span class="boot-step-ico">⟳</span><span>Middleware ready</span></div>
+    <div class="boot-step" id="bs-be"><span class="boot-step-ico">⏳</span><span>Backend training models…</span></div>
+    <div class="boot-step" id="bs-ok"><span class="boot-step-ico">⏳</span><span>API health confirmed</span></div>
+  </div>
+  <div class="boot-bar-wrap"><div class="boot-bar" id="boot-bar" style="width:15%"></div></div>
+  <div class="boot-err" id="boot-err"></div>
+  <button class="boot-retry" id="boot-retry" onclick="startBoot()">↩ Retry</button>
+  <button class="boot-retry" id="boot-skip" onclick="revealApp()" style="display:none;border-color:rgba(56,189,248,.4);color:#38bdf8;margin-top:4px">⚡ Enter anyway</button>
+</div>
+
+<div id="root" style="display:none"></div>
+
+<script>
+/* BOOT SEQUENCE
+   Fixes vs original:
+   1. AbortSignal.timeout() → AbortController (broad browser support)
+   2. Entire function wrapped in try/catch so errors surface visibly
+   3. revealApp() extracted so bypass button works
+   4. BASE_URL uses relative path so it works regardless of port
+*/
+function step(id, state, ico) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.className = 'boot-step ' + state;
+  el.querySelector('.boot-step-ico').textContent = ico;
+}
+function setBar(pct) {
+  const b = document.getElementById('boot-bar');
+  if (b) b.style.width = pct + '%';
+}
+function revealApp() {
+  const boot = document.getElementById('boot');
+  const root = document.getElementById('root');
+  if (boot) boot.classList.add('hidden');
+  if (root) root.style.display = '';
+  setTimeout(() => { if (boot && boot.parentNode) boot.remove(); }, 600);
+}
+async function fetchHealth() {
+  const ctrl = new AbortController();
+  const tid = setTimeout(() => ctrl.abort(), 4000);
+  try {
+    const r = await fetch('/api/health', { signal: ctrl.signal });
+    clearTimeout(tid);
+    if (!r.ok) return false;
+    const d = await r.json();
+    return d.status === 'ok' && Array.isArray(d.models_ready) && d.models_ready.length === 3;
+  } catch(e) { clearTimeout(tid); return false; }
+}
+async function startBoot() {
+  try {
+    document.getElementById('boot-err').className = 'boot-err';
+    document.getElementById('boot-retry').className = 'boot-retry';
+    document.getElementById('boot-skip').style.display = 'none';
+    step('bs-mw','active','⟳'); step('bs-be','','⏳'); step('bs-ok','','⏳');
+    setBar(15);
+    await new Promise(r => setTimeout(r, 300));
+    step('bs-mw','done','✅'); setBar(35);
+    step('bs-be','active','⟳');
+    let attempts = 0, healthy = false;
+    while (attempts < 40) {
+      attempts++;
+      healthy = await fetchHealth();
+      if (healthy) { step('bs-be','done','✅'); setBar(80); break; }
+      setBar(35 + Math.min(attempts * 1.1, 40));
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    if (!healthy) {
+      step('bs-be','fail','❌');
+      const err = document.getElementById('boot-err');
+      err.textContent = 'Backend did not respond within 40s. Make sure python middleware.py is running. Check backend.log for errors.';
+      err.className = 'boot-err show';
+      document.getElementById('boot-retry').className = 'boot-retry show';
+      document.getElementById('boot-skip').style.display = 'inline-block';
+      return;
+    }
+    step('bs-ok','active','⟳');
+    await new Promise(r => setTimeout(r, 200));
+    step('bs-ok','done','✅'); setBar(100);
+    await new Promise(r => setTimeout(r, 500));
+    revealApp();
+  } catch(err) {
+    const el = document.getElementById('boot-err');
+    if (el) { el.textContent = 'Boot error: ' + err.message; el.className = 'boot-err show'; }
+    document.getElementById('boot-retry').className = 'boot-retry show';
+    document.getElementById('boot-skip').style.display = 'inline-block';
+  }
+}
+startBoot();
+</script>
+
+<script>
+const {useState,useEffect,useCallback,useRef} = React;
+
+/* ══════════════════════════════════════════════════════
+   API LAYER
+   FIX: BASE points to :8080 (middleware) — not :5000 (backend directly).
+   The sidebar label previously said "localhost:5000" which was misleading;
+   the browser talks to :8080 and middleware proxies to :5000.
+   ══════════════════════════════════════════════════════ */
+const BASE = ''; // relative — works on any port/host
+
+async function api(path, opts={}) {
+  const controller = new AbortController();
+  const tid = setTimeout(() => controller.abort(), 15000);
+  try {
+    const r = await fetch(BASE + path, {
+      headers: {'Content-Type':'application/json'},
+      signal: controller.signal,
+      ...opts
+    });
+    clearTimeout(tid);
+    if (!r.ok) {
+      let msg = `HTTP ${r.status}`;
+      try { const d = await r.json(); msg = d.error || msg; } catch {}
+      throw new Error(msg);
+    }
+    return r.json();
+  } catch(e) {
+    clearTimeout(tid);
+    if (e.name === 'AbortError') throw new Error('Request timed out — backend may be busy');
+    throw e;
+  }
+}
+
+const GET  = path => api(path);
+const POST = (path, body) => api(path, {method:'POST', body: JSON.stringify(body)});
+
+async function checkHealth() {
+  try {
+    const d = await GET('/api/health');
+    // FIX: same check as boot screen — confirm 3 models trained
+    return d.status === 'ok' && Array.isArray(d.models_ready) && d.models_ready.length === 3;
+  } catch { return false; }
+}
+
+/* ══════════════════════════════════════════════════════
+   SMALL COMPONENTS
+   ══════════════════════════════════════════════════════ */
+function ProbBar({label, value, color}) {
+  return React.createElement('div', {className:'prob-row'},
+    React.createElement('div', {className:'prob-hd'},
+      React.createElement('span', null, label),
+      React.createElement('span', null, `${(value*100).toFixed(1)}%`)),
+    React.createElement('div', {className:'prob-track'},
+      React.createElement('div', {className:'prob-fill', style:{width:`${value*100}%`, background:color}})));
+}
+
+function ShapBar({feature, value, maxAbs}) {
+  const pos = value > 0;
+  const pct = Math.min(Math.abs(value) / maxAbs * 46, 46);
+  const label = feature.replace('cc_','').replace('arrival_','arr:').replace(/_/g,' ');
+  return React.createElement('div', {className:'shap-row'},
+    React.createElement('div', {className:'shap-name', title:feature}, label),
+    React.createElement('div', {className:'shap-track'},
+      React.createElement('div', {className:'shap-axis'}),
+      React.createElement('div', {className:`shap-bar ${pos?'pos':'neg'}`, style:{width:`${pct}%`}})),
+    React.createElement('div', {className:'shap-val'},
+      value > 0 ? `+${value.toFixed(4)}` : value.toFixed(4)));
+}
+
+function Flag({f}) {
+  const ico = {critical:'🚨', warning:'⚠️', info:'ℹ️'};
+  return React.createElement('div', {className:`flag ${f.severity}`},
+    React.createElement('span', {className:'flag-ico'}, ico[f.severity]),
+    React.createElement('div', null,
+      React.createElement('div', {className:'flag-title'}, f.flag),
+      React.createElement('div', {className:'flag-detail'}, f.detail)));
+}
+
+function Spinner() {
+  return React.createElement('div', {className:'c-box'},
+    React.createElement('div', {className:'spinner'}));
+}
+
+function TBadge({v}) {
+  const cls = v==='High'?'bg-h':v==='Medium'?'bg-m':'bg-l';
+  return React.createElement('span', {className:cls}, v);
+}
+
+/* ══════════════════════════════════════════════════════
+   PAGE: PREDICT
+   ══════════════════════════════════════════════════════ */
+function PredictPage({model, apiOk, toast}) {
+  const [form, setForm] = useState({
+    patient_name:'', age:'65', sex:'M', heart_rate:'110', systolic_bp:'85', diastolic_bp:'55',
+    temperature_c:'37.2', spo2:'88', resp_rate:'26', gcs:'10', pain_score:'7',
+    arrival_mode:'Ambulance', chief_complaint:'Chest Pain',
+    comorbidities:'3', prior_ed_visits:'2'
+  });
+  const [res, setRes]         = useState(null);
+  const [busy, setBusy]       = useState(false);
+  const [ov, setOv]           = useState(null);
+  const [ovNote, setNote]     = useState('');
+  const [cmpRes, setCmpRes]   = useState(null);
+  const [cmpBusy, setCmpBusy] = useState(false);
+  const debounceRef           = useRef(null);
+  const modelRef              = useRef(model);
+
+  // Keep modelRef in sync so the debounced callback always uses latest model
+  useEffect(() => { modelRef.current = model; }, [model]);
+
+  // Re-run live prediction when model changes (modelRef alone won't re-trigger the effect)
+  useEffect(() => {
+    if (!apiOk || !res) return;  // only re-trigger if we already have a result
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      setBusy(true);
+      try {
+        const data = await POST('/api/predict', {...form, model});
+        setRes(data);
+      } catch(e) {}
+      setBusy(false);
+    }, 300);
+    return () => clearTimeout(debounceRef.current);
+  }, [model]);
+
+  // ── LIVE PREDICTION: re-run automatically 600ms after any field change ──
+  useEffect(() => {
+    if (!apiOk) return;
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      setBusy(true); setOv(null); setNote('');
+      try {
+        const data = await POST('/api/predict', {...form, model: modelRef.current});
+        setRes(data);
+      } catch(e) { /* silent — user sees stale result */ }
+      setBusy(false);
+    }, 600);
+    return () => clearTimeout(debounceRef.current);
+  }, [form, apiOk]);
+
+  const set = k => e => setForm(f => ({...f, [k]: e.target.value}));
+
+  const run = async () => {
+    // Manual force-refresh (same logic as debounce but immediate)
+    if (!apiOk) { toast('Backend offline — run: python middleware.py', 'e'); return; }
+    clearTimeout(debounceRef.current);
+    setBusy(true); setOv(null); setNote(''); setCmpRes(null);
+    try {
+      const data = await POST('/api/predict', {...form, model});
+      setRes(data);
+      toast(`Prediction: ${data.prediction} (${(data.confidence*100).toFixed(1)}%)`, 's');
+    } catch(e) { toast('Prediction failed: ' + e.message, 'e'); }
+    setBusy(false);
+  };
+
+  const runCompare = async () => {
+    if (!apiOk) { toast('Backend offline', 'e'); return; }
+    setCmpBusy(true); setCmpRes(null);
+    try {
+      const data = await POST('/api/predict/compare', form);
+      setCmpRes(data);
+      toast('Model comparison complete', 's');
+    } catch(e) { toast('Compare failed: ' + e.message, 'e'); }
+    setCmpBusy(false);
+  };
+
+  const PC = {High:'var(--red)', Medium:'var(--amber)', Low:'var(--green)'};
+  const cls = res ? res.prediction[0] : '';
+
+  const expl = res
+    ? Object.entries(res.explanation).sort((a,b) => Math.abs(b[1]) - Math.abs(a[1]))
+    : [];
+  const maxAbs = expl.length ? Math.max(...expl.map(([,v]) => Math.abs(v))) : 1;
+
+  const warn = {
+    gcs: +form.gcs < 9,
+    spo2: +form.spo2 < 90,
+    systolic_bp: +form.systolic_bp < 90,
+    heart_rate: +form.heart_rate > 140 || +form.heart_rate < 45,
+    resp_rate: +form.resp_rate > 28,
+  };
+
+  const vitalFields = [
+    ['heart_rate','Heart Rate (bpm)'],['systolic_bp','Systolic BP'],
+    ['diastolic_bp','Diastolic BP'],['spo2','SpO₂ (%)'],
+    ['resp_rate','Resp Rate (/min)'],['temperature_c','Temp (°C)'],
+  ];
+
+  return React.createElement('div', null,
+    React.createElement('div', {className:'g4', style:{marginBottom:18}},
+      [[form.patient_name || 'Unnamed Patient', form.age + ' yrs', `Sex: ${form.sex}`, '--cyan'],
+       ['Arrival', form.arrival_mode, form.chief_complaint, '--amber'],
+       ['GCS Score', form.gcs, +form.gcs<9?'⚠️ Critical':'Within range', +form.gcs<9?'--red':'--green'],
+       ['SpO₂', form.spo2+'%', +form.spo2<90?'⚠️ Hypoxia':'Normal', +form.spo2<90?'--red':'--green'],
+      ].map(([l,v,s,c],i) =>
+        React.createElement('div', {key:i, className:'tile'},
+          React.createElement('div', {className:'tile-accent', style:{background:`var(${c})`}}),
+          React.createElement('div', {className:'tile-lbl'}, i===0 ? 'Patient' : l),
+          React.createElement('div', {className:'tile-val', style:{fontSize: i===0 ? 16 : 22, paddingTop:4, wordBreak:'break-word'}}, v),
+          React.createElement('div', {className:'tile-sub'}, i===0 ? `Age ${form.age} · ${form.sex==='M'?'Male':'Female'}` : s)))
+    ),
+
+    React.createElement('div', {className:'g2', style:{gap:20, alignItems:'start'}},
+      React.createElement('div', {className:'card'},
+        React.createElement('div', {className:'card-lbl'},
+          React.createElement('div', {className:'card-lbl-bar', style:{background:'var(--cyan)'}}),
+          'Patient Data Entry',
+          busy && React.createElement('span', {style:{
+            marginLeft:'auto', fontSize:9, color:'var(--cyan)',
+            fontFamily:'var(--mono)', letterSpacing:1, animation:'blink 1s ease-in-out infinite'
+          }}, '⟳ LIVE')),
+        React.createElement('div', {className:'fsec'},
+          React.createElement('div', {className:'sec-head'}, '🪪 Patient Identity'),
+          React.createElement('div', {className:'fg'},
+            React.createElement('label', null, 'Patient Name'),
+            React.createElement('input', {
+              type:'text', value:form.patient_name,
+              placeholder:'e.g. Rajesh Kumar',
+              onChange:set('patient_name')
+            }))),
+        React.createElement('div', {className:'fsec'},
+          React.createElement('div', {className:'sec-head'}, '🫀 Vital Signs'),
+          React.createElement('div', {className:'fgrid'},
+            vitalFields.map(([k,l]) =>
+              React.createElement('div', {key:k, className:'fg'},
+                React.createElement('label', null, l),
+                React.createElement('input', {
+                  type:'number', value:form[k], onChange:set(k),
+                  ...(warn[k] ? {'data-warn':'1'} : {})
+                }))))),
+        React.createElement('div', {className:'fsec'},
+          React.createElement('div', {className:'sec-head'}, '🧠 Clinical Indicators'),
+          React.createElement('div', {className:'fgrid'},
+            [['age','Age (yrs)'],['gcs','GCS (3–15)'],['pain_score','Pain (0–10)'],
+             ['comorbidities','Comorbidities'],['prior_ed_visits','Prior ED Visits']].map(([k,l]) =>
+              React.createElement('div', {key:k, className:'fg'},
+                React.createElement('label', null, l),
+                React.createElement('input', {
+                  type:'number', value:form[k], onChange:set(k),
+                  ...(warn[k] ? {'data-warn':'1'} : {})
+                })
+              )).concat([
+              React.createElement('div', {key:'sex', className:'fg'},
+                React.createElement('label', null, 'Sex'),
+                React.createElement('select', {value:form.sex, onChange:set('sex')},
+                  React.createElement('option', {value:'M'}, 'Male'),
+                  React.createElement('option', {value:'F'}, 'Female')))
+            ]))),
+        React.createElement('div', {className:'fsec'},
+          React.createElement('div', {className:'sec-head'}, '🏥 Clinical Context'),
+          React.createElement('div', {className:'fgrid'},
+            React.createElement('div', {className:'fg'},
+              React.createElement('label', null, 'Arrival Mode'),
+              React.createElement('select', {value:form.arrival_mode, onChange:set('arrival_mode')},
+                ['Walk-in','Ambulance','Transfer'].map(v =>
+                  React.createElement('option', {key:v, value:v}, v)))),
+            React.createElement('div', {className:'fg'},
+              React.createElement('label', null, 'Chief Complaint'),
+              React.createElement('select', {value:form.chief_complaint, onChange:set('chief_complaint')},
+                ['Chest Pain','Dyspnea','Abdominal Pain','Trauma','Headache',
+                 'Fever','Syncope','Altered Mental Status','Laceration','Other'].map(v =>
+                  React.createElement('option', {key:v, value:v}, v)))))),
+        React.createElement('div', {style:{display:'flex', gap:10, marginTop:4}},
+          React.createElement('button', {className:'btn-run', onClick:run, disabled:busy, style:{flex:2}},
+            busy ? '⟳  Updating…' : '🔄  Refresh Now'),
+          React.createElement('button', {className:'btn-run', onClick:runCompare, disabled:cmpBusy,
+            style:{flex:1, background:'linear-gradient(135deg,var(--vio),#5b21b6)', fontSize:11}},
+            cmpBusy ? '⟳' : '⚡ Compare All')),
+        React.createElement('div', {style:{marginTop:8, fontSize:10, color:'var(--dim)', textAlign:'center', display:'flex', alignItems:'center', justifyContent:'center', gap:6}},
+          React.createElement('span', {style:{width:6, height:6, borderRadius:'50%', background:'var(--green)', display:'inline-block', boxShadow:'0 0 6px var(--green)', flexShrink:0}}),
+          'Live mode — prediction updates automatically as you type')),
+
+      React.createElement('div', {style:{display:'flex', flexDirection:'column', gap:14}},
+        res ? [
+          React.createElement('div', {key:'hero', className:`pred-hero ${cls}`},
+            React.createElement('div', {className:'pred-sub'},
+              form.patient_name ? `${form.patient_name} · AI Triage` : 'AI Triage Recommendation'),
+            React.createElement('div', {className:'pred-word'}, res.prediction),
+            res.override_applied && React.createElement('div', {style:{
+              display:'inline-flex', alignItems:'center', gap:6, margin:'6px auto 0',
+              background: res.override_tier==='critical' ? 'rgba(248,113,113,0.2)' : 'rgba(251,191,36,0.2)',
+              border: `1px solid ${res.override_tier==='critical' ? 'rgba(248,113,113,0.5)' : 'rgba(251,191,36,0.5)'}`,
+              borderRadius:99, padding:'3px 12px', fontSize:10, fontWeight:700,
+              color: res.override_tier==='critical' ? '#fca5a5' : '#fcd34d',
+              letterSpacing:0.5,
+            }},
+              res.override_tier==='critical' ? '🚨 Clinical Override — Critical Vitals' : '⚠️ Clinical Override — Emergent Vitals'),
+            res.override_applied && React.createElement('div', {style:{fontSize:10, color:'rgba(255,255,255,0.5)', marginTop:3}},
+              `ML predicted ${res.ml_raw_prediction} — overridden by clinical safety rules`),
+            React.createElement('div', {className:'pred-conf', style:{marginTop: res.override_applied ? 6 : 0}},
+              'Confidence: ', React.createElement('strong', null, `${(res.confidence*100).toFixed(1)}%`)),
+            React.createElement('div', {className:'pred-via'}, `${res.model_name} · live`),
+            React.createElement('div', {style:{marginTop:14}},
+              ['High','Medium','Low'].map(k =>
+                React.createElement(ProbBar, {key:k, label:k, value:res.probabilities[k], color:PC[k]}))),
+            !ov && React.createElement('div', {className:'ov-area'},
+              React.createElement('div', {style:{fontSize:10, color:'var(--soft)', marginBottom:7}}, '⚡ Clinician Override:'),
+              React.createElement('div', {style:{display:'flex', gap:7}},
+                ['High','Medium','Low'].map(l =>
+                  React.createElement('button', {key:l, className:`btn-ov ${l[0]}`,
+                    onClick:() => {setOv(l); toast(`Override recorded → ${l}`, 's');}},
+                    `→ ${l}`))),
+              React.createElement('textarea', {className:'ov-note',
+                placeholder:'Optional: clinical rationale for override…',
+                value:ovNote, onChange:e=>setNote(e.target.value)})),
+            ov && React.createElement('div', {className:'ov-done'},
+              `✓ Overridden to ${ov} by clinician.${ovNote?' Note: '+ovNote:''}`)),
+          res.risk_flags.length > 0 && React.createElement('div', {key:'flags', className:'card'},
+            React.createElement('div', {className:'card-lbl'},
+              React.createElement('div', {className:'card-lbl-bar', style:{background:'var(--red)'}}),
+              `Clinical Risk Flags (${res.risk_flags.length})`),
+            res.risk_flags.map((f,i) => React.createElement(Flag, {key:i, f})))
+        ] : busy
+          ? React.createElement('div', {className:'card'}, React.createElement(Spinner))
+          : React.createElement('div', {className:'card c-box'},
+              React.createElement('div', {className:'empty-ico'}, apiOk ? '⟳' : '🏥'),
+              React.createElement('div', {style:{fontSize:12, color:'var(--muted)', textAlign:'center'}},
+                apiOk
+                  ? 'Initialising live prediction…'
+                  : '⚠️ Backend offline — run: python middleware.py'))
+      )),
+
+    res && React.createElement('div', {className:'g2', style:{gap:18, marginTop:18}},
+      React.createElement('div', {className:'card'},
+        React.createElement('div', {className:'card-lbl'},
+          React.createElement('div', {className:'card-lbl-bar', style:{background:'var(--green)'}}),
+          'XAI — Local Feature Explanation (SHAP-style)'),
+        React.createElement('div', {style:{fontSize:10, color:'var(--muted)', marginBottom:12}},
+          '🔴 Red bars push toward HIGH risk  ·  🔵 Cyan bars push toward LOW risk'),
+        expl.map(([feat, val]) =>
+          React.createElement(ShapBar, {key:feat, feature:feat, value:val, maxAbs}))),
+      React.createElement('div', {className:'card'},
+        React.createElement('div', {className:'card-lbl'},
+          React.createElement('div', {className:'card-lbl-bar', style:{background:'var(--amber)'}}),
+          'Clinical Notes & AI Reasoning'),
+        res.clinical_notes.map((n,i) =>
+          React.createElement('div', {key:i, className:`note-box ${n.type}`},
+            React.createElement('span', {style:{marginRight:5}},
+              n.type==='uncertainty'?'⚠️':n.type==='alert'?'🚨':'💡'),
+            n.message)),
+        React.createElement('div', {className:'disc'},
+          '⚖️ Decision support only. Final triage always rests with the attending clinician.'))),
+
+    cmpRes && React.createElement('div', {className:'card', style:{marginTop:18}},
+      React.createElement('div', {className:'card-lbl'},
+        React.createElement('div', {className:'card-lbl-bar', style:{background:'var(--vio)'}}),
+        'Model Comparison — /api/predict/compare'),
+      React.createElement('div', {style:{display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:12}},
+        Object.entries(cmpRes).map(([key, r], mi) => {
+          const MCOLS = ['#1d4ed8','#0e7490','#059669'];
+          if (r.error) return React.createElement('div', {key, className:'mdl-card'},
+            React.createElement('div', {className:'mdl-top', style:{background:MCOLS[mi]}}),
+            React.createElement('div', {className:'mdl-name'}, r.name || key),
+            React.createElement('div', {style:{fontSize:10, color:'var(--red)'}}, r.error));
+          const PC = {High:'var(--red)', Medium:'var(--amber)', Low:'var(--green)'};
+          return React.createElement('div', {key, className:`mdl-card ${key===model?'sel':''}`},
+            React.createElement('div', {className:'mdl-top', style:{background:MCOLS[mi]}}),
+            React.createElement('div', {className:'mdl-name'}, r.name),
+            React.createElement('div', {style:{textAlign:'center', margin:'8px 0'}},
+              React.createElement('span', {style:{
+                fontFamily:'var(--serif)', fontSize:22, fontStyle:'italic',
+                color: r.prediction==='High'?'var(--red)':r.prediction==='Medium'?'var(--amber)':'var(--green)'
+              }}, r.prediction)),
+            React.createElement('div', {className:'mrow'},
+              React.createElement('span', {className:'mkey'}, 'Confidence'),
+              React.createElement('span', {className:'mval'}, `${(r.confidence*100).toFixed(1)}%`)),
+            React.createElement('div', {className:'mrow'},
+              React.createElement('span', {className:'mkey'}, 'Accuracy'),
+              React.createElement('span', {className:'mval'}, `${(r.metrics.accuracy*100).toFixed(1)}%`)),
+            React.createElement('div', {className:'mrow'},
+              React.createElement('span', {className:'mkey'}, 'AUC'),
+              React.createElement('span', {className:'mval'}, r.metrics.auc.toFixed(4))),
+            Object.entries(r.probabilities).map(([cls, p]) =>
+              React.createElement(ProbBar, {key:cls, label:cls, value:p, color:PC[cls]})));
+        })),
+      React.createElement('div', {style:{marginTop:10, fontSize:10, color:'var(--muted)'}},
+        '⚡ All 3 models evaluated on the same patient in a single round-trip to /api/predict/compare'))
+  );
+}
+
+/* ══════════════════════════════════════════════════════
+   PURE-SVG GROUPED BAR CHART
+   (Replaces Recharts — works with React 18 UMD, no ResizeObserver)
+   ══════════════════════════════════════════════════════ */
+function SvgGroupedBar({ data, labelKey, series, domain, height }) {
+  const [tip, setTip] = useState(null);
+  const W = 440, H = height || 210;
+  const ML = 38, MR = 10, MT = 12, MB = 36;
+  const chartW = W - ML - MR;
+  const chartH = H - MT - MB;
+  const [lo, hi] = domain || [0, 100];
+  const yScale = v => chartH - ((v - lo) / (hi - lo)) * chartH;
+  const numSeries = series.length;
+  const groupW = chartW / data.length;
+  const barW = Math.min(28, (groupW / numSeries) - 4);
+  const yTicks = [lo, lo+(hi-lo)*0.25, lo+(hi-lo)*0.5, lo+(hi-lo)*0.75, hi];
+
+  return React.createElement('div', {style:{position:'relative', userSelect:'none'}},
+    React.createElement('svg', {
+      viewBox: `0 0 ${W} ${H}`,
+      style: {width:'100%', height:H, display:'block', overflow:'visible'}
+    },
+      // Y gridlines + labels
+      yTicks.map((t,i) =>
+        React.createElement('g', {key:i},
+          React.createElement('line', {
+            x1: ML, x2: ML+chartW,
+            y1: MT+yScale(t), y2: MT+yScale(t),
+            stroke:'rgba(255,255,255,0.07)', strokeWidth:1
+          }),
+          React.createElement('text', {
+            x: ML-5, y: MT+yScale(t)+4,
+            textAnchor:'end', fill:'#6b7fa3', fontSize:9
+          }, t)
+        )
+      ),
+      // Bars
+      data.map((row, gi) =>
+        series.map((s, si) => {
+          const val = row[s.key] || 0;
+          const bh  = Math.max(2, ((val - lo) / (hi - lo)) * chartH);
+          const groupOffset = gi * groupW + groupW/2;
+          const totalBarW = numSeries * barW + (numSeries-1) * 3;
+          const x = ML + groupOffset - totalBarW/2 + si*(barW+3);
+          const y = MT + yScale(val);
+          const fill = s.multiColor ? s.multiColor[gi % s.multiColor.length] : s.color;
+          return React.createElement('g', {key:`${gi}-${si}`},
+            React.createElement('rect', {
+              x, y, width: barW, height: bh,
+              fill, rx: 3, opacity: 0.92,
+              onMouseEnter: e => setTip({gi, si, val, label: row[labelKey], sLabel: s.label, x: e.clientX, y: e.clientY}),
+              onMouseLeave: () => setTip(null),
+              style: {cursor:'default', transition:'opacity .15s'},
+            }),
+            React.createElement('text', {
+              x: x + barW/2, y: y - 3,
+              textAnchor:'middle', fill:'#ccd6f6', fontSize:8, fontWeight:600
+            }, val.toFixed(1))
+          );
+        })
+      ),
+      // X axis labels
+      data.map((row, gi) => {
+        const groupOffset = gi * groupW + groupW/2;
+        return React.createElement('text', {
+          key:gi, x: ML+groupOffset, y: H - MB + 14,
+          textAnchor:'middle', fill:'#9baec8', fontSize:10
+        }, row[labelKey]);
+      }),
+      // X axis line
+      React.createElement('line', {
+        x1:ML, x2:ML+chartW, y1:MT+chartH, y2:MT+chartH,
+        stroke:'rgba(255,255,255,0.15)', strokeWidth:1
+      })
+    ),
+    // Legend row
+    React.createElement('div', {style:{display:'flex', gap:14, justifyContent:'center', marginTop:6}},
+      series.map((s, si) =>
+        React.createElement('div', {key:si, style:{display:'flex', alignItems:'center', gap:5}},
+          React.createElement('div', {style:{
+            width:10, height:10, borderRadius:2,
+            background: s.multiColor ? `linear-gradient(90deg,${s.multiColor.join(',')})` : s.color
+          }}),
+          React.createElement('span', {style:{fontSize:10, color:'#9baec8'}}, s.label)
+        )
+      )
+    ),
+    // Tooltip
+    tip && React.createElement('div', {
+      style:{
+        position:'fixed', left:tip.x+12, top:tip.y-28,
+        background:'#1a2030', border:'1px solid rgba(255,255,255,0.12)',
+        borderRadius:7, padding:'6px 10px', fontSize:11,
+        color:'#ccd6f6', pointerEvents:'none', zIndex:999,
+        boxShadow:'0 8px 24px rgba(0,0,0,0.5)'
+      }
+    }, `${tip.label} — ${tip.sLabel}: ${tip.val.toFixed(2)}%`)
+  );
+}
+
+/* ══════════════════════════════════════════════════════
+   PAGE: ANALYTICS
+   ══════════════════════════════════════════════════════ */
+function AnalyticsPage({model, apiOk, toast}) {
+  const [tab, setTab]   = useState('comparison');
+  const [metrics, setM] = useState(null);
+  const [imp, setImp]   = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!apiOk) { toast('Backend offline — metrics unavailable', 'e'); return; }
+    setBusy(true);
+    Promise.all([
+      GET('/api/models/metrics'),
+      GET('/api/models/feature_importance'),
+    ]).then(([m, fi]) => {
+      setM(m);
+      setImp(fi.random_forest || fi[Object.keys(fi)[0]]);
+      setBusy(false);
+    }).catch(e => { toast('Failed to load metrics: ' + e.message, 'e'); setBusy(false); });
+  }, [apiOk]);
+
+  if (busy) return React.createElement('div', {className:'card', style:{marginTop:20}}, React.createElement(Spinner));
+  if (!metrics) return React.createElement('div', {className:'card c-box', style:{marginTop:20}},
+    React.createElement('div', {className:'empty-ico'}, '📊'),
+    React.createElement('div', {style:{fontSize:12, color:'var(--muted)'}},
+      apiOk ? 'Loading…' : 'Start backend to view analytics'));
+
+  const COLS = ['#1d4ed8','#0e7490','#059669'];
+  const barData = Object.entries(metrics).map(([k,v], i) => ({
+    name: v.name.split(' ').map(w=>w[0]).join(''),
+    fullName: v.name,
+    accuracy: +(v.accuracy*100).toFixed(1),
+    auc: +(v.auc*100).toFixed(1),
+    cv: +(v.cv_mean*100).toFixed(1),
+  }));
+  const cm = metrics[model] ? metrics[model].confusion_matrix : null;
+  const CN = ['High','Low','Medium'];
+  // FIX: show correct N=1000 split (800 train / 200 test)
+  const N = metrics[Object.keys(metrics)[0]] ? 1000 : 1000;
+  const trainN = Math.round(N * 0.8);
+  const testN  = Math.round(N * 0.2);
+
+  return React.createElement('div', null,
+    React.createElement('div', {className:'g4', style:{marginBottom:18}},
+      [['Best Accuracy', `${(Math.max(...Object.values(metrics).map(v=>v.accuracy))*100).toFixed(1)}%`, 'Across 3 models', '--green'],
+       ['Best AUC', (Math.max(...Object.values(metrics).map(v=>v.auc))).toFixed(3), 'Macro OvR', '--cyan'],
+       ['Train Set', `${trainN}`, `80% of ${N} records`, '--vio'],
+       ['Test Set',  `${testN}`,  '20% held-out set', '--amber'],
+      ].map(([l,v,s,c],i) =>
+        React.createElement('div', {key:i, className:'tile'},
+          React.createElement('div', {className:'tile-accent', style:{background:`var(${c})`}}),
+          React.createElement('div', {className:'tile-lbl'}, l),
+          React.createElement('div', {className:'tile-val', style:{fontSize:22, paddingTop:4}}, v),
+          React.createElement('div', {className:'tile-sub'}, s))),
+    ),
+
+    React.createElement('div', {className:'tabs'},
+      [['comparison','Model Comparison'],['features','Feature Importance'],['confusion','Confusion Matrix'],['roc','ROC Curves']].map(([t,l]) =>
+        React.createElement('div', {key:t, className:`tab ${tab===t?'on':''}`, onClick:()=>setTab(t)}, l))),
+
+    tab==='comparison' && React.createElement('div', null,
+      React.createElement('div', {className:'g2', style:{gap:18, marginBottom:18}},
+        React.createElement('div', {className:'card'},
+          React.createElement('div', {className:'card-lbl'},
+            React.createElement('div', {className:'card-lbl-bar', style:{background:'var(--cyan)'}}),
+            'Accuracy & AUC (×100)'),
+          React.createElement(SvgGroupedBar, {
+            data: barData,
+            labelKey: 'name',
+            series: [
+              {key:'accuracy', label:'Accuracy %', color:'#38bdf8'},
+              {key:'auc',      label:'AUC×100',    color:'#34d399'},
+            ],
+            domain: [50, 100],
+            height: 210,
+          })),
+        React.createElement('div', {className:'card'},
+          React.createElement('div', {className:'card-lbl'},
+            React.createElement('div', {className:'card-lbl-bar', style:{background:'var(--vio)'}}),
+            '5-Fold Cross-Validation Accuracy'),
+          React.createElement(SvgGroupedBar, {
+            data: barData,
+            labelKey: 'name',
+            series: [
+              {key:'cv', label:'CV Accuracy %', color:null, multiColor: COLS},
+            ],
+            domain: [50, 100],
+            height: 210,
+          })),
+      ),
+      React.createElement('div', {className:'g3', style:{gap:14}},
+        Object.entries(metrics).map(([k,v], mi) =>
+          React.createElement('div', {key:k, className:`mdl-card ${k===model?'sel':''}`},
+            React.createElement('div', {className:'mdl-top', style:{background:COLS[mi]}}),
+            React.createElement('div', {className:'mdl-name'}, v.name),
+            [['Accuracy', `${(v.accuracy*100).toFixed(2)}%`],
+             ['ROC-AUC', v.auc.toFixed(4)],
+             ['CV Mean', `${(v.cv_mean*100).toFixed(2)}%`],
+             ['CV Std', `±${(v.cv_std*100).toFixed(2)}%`]].map(([mk,mv]) =>
+              React.createElement('div', {key:mk, className:'mrow'},
+                React.createElement('span', {className:'mkey'}, mk),
+                React.createElement('span', {className:'mval'}, mv))),
+            v.roc && Object.entries(v.roc).map(([cls,r]) =>
+              React.createElement('div', {key:cls, className:'mrow'},
+                React.createElement('span', {className:'mkey'}, `AUC ${cls}`),
+                React.createElement('span', {className:'mval',
+                  style:{color:cls==='High'?'var(--red)':cls==='Low'?'var(--green)':'var(--amber)'}},
+                  r.auc.toFixed(4))))))
+      )),
+
+    tab==='features' && imp && React.createElement('div', {className:'card'},
+      React.createElement('div', {className:'card-lbl'},
+        React.createElement('div', {className:'card-lbl-bar', style:{background:'var(--cyan)'}}),
+        'Global Feature Importance — Random Forest'),
+      imp.map((f,i) =>
+        React.createElement('div', {key:f.feature, className:'feat-row'},
+          React.createElement('div', {className:'feat-name', title:f.feature}, `${i+1}. ${f.feature}`),
+          React.createElement('div', {className:'feat-track'},
+            React.createElement('div', {className:'feat-fill', style:{
+              width:`${(f.importance/imp[0].importance*100).toFixed(1)}%`,
+              background: i===0?'var(--red)':i===1?'#e25c3f':i===2?'var(--amber)':i<5?'#c0a030':'var(--cyan)'
+            }})),
+          React.createElement('div', {className:'feat-val'}, f.importance.toFixed(4))))),
+
+    tab==='confusion' && cm && React.createElement('div', {className:'card'},
+      React.createElement('div', {className:'card-lbl'},
+        React.createElement('div', {className:'card-lbl-bar', style:{background:'var(--cyan)'}}),
+        `Confusion Matrix — ${metrics[model].name} — ${testN} test patients`),
+      React.createElement('div', {style:{overflowX:'auto', paddingTop:8}},
+        React.createElement('div', {className:'cm-wrap'},
+          React.createElement('div', {className:'cm-cell cm-hd'}, ''),
+          ...CN.map(c => React.createElement('div', {key:c, className:'cm-cell cm-hd'}, `Pred ${c}`)),
+          ...CN.map((row,i) => [
+            React.createElement('div', {key:`r${i}`, className:'cm-cell cm-hd'}, `True ${row}`),
+            ...CN.map((_,j) =>
+              React.createElement('div', {key:`${i}${j}`, className:`cm-cell ${i===j?'cm-d':'cm-o'}`}, cm[i][j]))
+          ]).flat())),
+      React.createElement('div', {style:{marginTop:11, fontSize:10, color:'var(--muted)'}},
+        `Correct: ${cm[0][0]+cm[1][1]+cm[2][2]} / ${testN} test patients`)
+    ),
+
+    tab==='roc' && React.createElement(RocPanel, {metrics, model, COLS})
+  );
+}
+
+/* ══════════════════════════════════════════════════════
+   ROC CURVE PANEL — Pure SVG, one curve per class
+   ══════════════════════════════════════════════════════ */
+function RocPanel({metrics, model, COLS}) {
+  const [selModel, setSelModel] = useState(model);
+  // FIX: sync selModel when the global model selector changes
+  useEffect(() => { setSelModel(model); }, [model]);
+  const ROC_COLORS = {'High':'#f87171','Low':'#34d399','Medium':'#fbbf24'};
+  const modelData  = metrics[selModel];
+  const roc        = modelData ? modelData.roc : null;
+
+  const W=420, H=360, ML=46, MR=16, MT=16, MB=46;
+  const cW = W-ML-MR, cH = H-MT-MB;
+
+  // scale FPR/TPR [0,1] to SVG coords
+  const sx = v => ML + v * cW;
+  const sy = v => MT + (1-v) * cH;
+
+  // build polyline points string from arrays
+  const pts = (fpr, tpr) =>
+    fpr.map((x,i) => `${sx(x).toFixed(1)},${sy(tpr[i]).toFixed(1)}`).join(' ');
+
+  const gridTicks = [0, 0.25, 0.5, 0.75, 1.0];
+
+  return React.createElement('div', null,
+    // Model selector pills
+    React.createElement('div', {style:{display:'flex', gap:8, marginBottom:14, flexWrap:'wrap'}},
+      React.createElement('span', {style:{fontSize:10, color:'var(--muted)', alignSelf:'center', marginRight:4}}, 'MODEL:'),
+      Object.entries(metrics).map(([k,v], mi) =>
+        React.createElement('button', {
+          key:k,
+          onClick: () => setSelModel(k),
+          style:{
+            padding:'5px 14px', borderRadius:20, fontSize:11, fontWeight:600, cursor:'pointer',
+            fontFamily:'inherit',
+            border: `1px solid ${selModel===k ? COLS[mi] : 'rgba(255,255,255,0.12)'}`,
+            background: selModel===k ? `${COLS[mi]}22` : 'transparent',
+            color: selModel===k ? COLS[mi] : '#6b7fa3',
+            transition:'all .15s'
+          }
+        }, v.name)
+      )
+    ),
+
+    roc && React.createElement('div', {className:'card', style:{padding:'18px 16px'}},
+      React.createElement('div', {className:'card-lbl'},
+        React.createElement('div', {className:'card-lbl-bar', style:{background:'var(--vio)'}}),
+        `ROC Curves — ${modelData.name} — One-vs-Rest per class`),
+
+      React.createElement('svg', {
+        viewBox:`0 0 ${W} ${H}`,
+        style:{width:'100%', maxWidth:500, display:'block', margin:'0 auto'}
+      },
+        // Grid lines
+        gridTicks.map(t =>
+          React.createElement('g', {key:`g${t}`},
+            React.createElement('line', {x1:sx(t),x2:sx(t),y1:MT,y2:MT+cH,stroke:'rgba(255,255,255,0.06)',strokeWidth:1}),
+            React.createElement('line', {x1:ML,x2:ML+cW,y1:sy(t),y2:sy(t),stroke:'rgba(255,255,255,0.06)',strokeWidth:1}),
+            React.createElement('text', {x:sx(t),y:MT+cH+14,textAnchor:'middle',fill:'#6b7fa3',fontSize:9}, t.toFixed(2)),
+            React.createElement('text', {x:ML-6,y:sy(t)+4,textAnchor:'end',fill:'#6b7fa3',fontSize:9}, t.toFixed(2))
+          )
+        ),
+
+        // Diagonal reference line (random classifier)
+        React.createElement('line', {
+          x1:sx(0),y1:sy(0),x2:sx(1),y2:sy(1),
+          stroke:'rgba(255,255,255,0.2)', strokeWidth:1, strokeDasharray:'5,4'
+        }),
+        React.createElement('text', {
+          x:sx(0.78),y:sy(0.72),fill:'rgba(255,255,255,0.25)',fontSize:9,transform:`rotate(-42,${sx(0.78)},${sy(0.72)})`
+        }, 'Random'),
+
+        // ROC curves — one per class
+        Object.entries(roc).map(([cls, d]) =>
+          React.createElement('g', {key:cls},
+            // Area fill under curve
+            React.createElement('polygon', {
+              points: `${sx(0)},${sy(0)} ${pts(d.fpr, d.tpr)} ${sx(1)},${sy(0)}`,
+              fill: ROC_COLORS[cls], fillOpacity: 0.07
+            }),
+            // Curve line
+            React.createElement('polyline', {
+              points: pts(d.fpr, d.tpr),
+              fill:'none', stroke: ROC_COLORS[cls], strokeWidth:2.2,
+              strokeLinejoin:'round', strokeLinecap:'round'
+            })
+          )
+        ),
+
+        // Axis labels
+        React.createElement('text', {
+          x:ML+cW/2, y:H-4, textAnchor:'middle', fill:'#9baec8', fontSize:11
+        }, 'False Positive Rate'),
+        React.createElement('text', {
+          x:11, y:MT+cH/2, textAnchor:'middle', fill:'#9baec8', fontSize:11,
+          transform:`rotate(-90,11,${MT+cH/2})`
+        }, 'True Positive Rate'),
+
+        // Chart border box
+        React.createElement('rect', {
+          x:ML, y:MT, width:cW, height:cH,
+          fill:'none', stroke:'rgba(255,255,255,0.1)', strokeWidth:1
+        })
+      ),
+
+      // AUC legend cards
+      React.createElement('div', {style:{display:'flex', gap:10, marginTop:16, flexWrap:'wrap', justifyContent:'center'}},
+        Object.entries(roc).map(([cls, d]) =>
+          React.createElement('div', {key:cls, style:{
+            display:'flex', alignItems:'center', gap:8,
+            background:'rgba(255,255,255,0.04)',
+            border:`1px solid ${ROC_COLORS[cls]}44`,
+            borderRadius:8, padding:'7px 14px'
+          }},
+            React.createElement('div', {style:{
+              width:24, height:3, borderRadius:2, background:ROC_COLORS[cls]
+            }}),
+            React.createElement('span', {style:{fontSize:11, color:'#9baec8'}}),
+            React.createElement('span', {style:{fontSize:12, fontWeight:700, color:ROC_COLORS[cls]}}, cls),
+            React.createElement('span', {style:{fontSize:10, color:'#6b7fa3', marginLeft:4}},'AUC ='),
+            React.createElement('span', {style:{fontSize:12, fontFamily:'monospace', fontWeight:600, color:'#e8eeff'}},
+              d.auc.toFixed(4))
+          )
+        )
+      ),
+
+      React.createElement('div', {style:{
+        marginTop:12, fontSize:10, color:'var(--muted)', lineHeight:1.6,
+        background:'rgba(255,255,255,0.02)', borderRadius:7, padding:'8px 12px',
+        border:'1px solid rgba(255,255,255,0.06)'
+      }},
+        '📈 Each curve shows the True Positive Rate vs False Positive Rate for one class using a One-vs-Rest strategy. ',
+        'AUC = 1.0 is perfect; AUC = 0.5 (dashed diagonal) is random. Higher and more left-hugging curves are better.'
+      )
+    ),
+
+    !roc && React.createElement('div', {className:'card c-box'},
+      React.createElement('div', {className:'empty-ico'}, '📉'),
+      React.createElement('div', {style:{fontSize:12, color:'var(--muted)'}}, 'No ROC data available for this model'))
+  );
+}
+
+/* ══════════════════════════════════════════════════════
+   PAGE: DATASET
+   ══════════════════════════════════════════════════════ */
+function DatasetPage({apiOk, toast}) {
+  const [rows, setRows]   = useState([]);
+  const [stats, setStats] = useState(null);
+  const [filter, setF]    = useState('All');
+  const [busy, setBusy]   = useState(false);
+
+  useEffect(() => {
+    if (!apiOk) { toast('Backend offline — dataset unavailable', 'e'); return; }
+    setBusy(true);
+    Promise.all([
+      GET('/api/dataset/sample'),
+      GET('/api/dataset/stats'),
+    ]).then(([sample, st]) => {
+      setRows(sample);
+      setStats(st);
+      setBusy(false);
+    }).catch(e => { toast('Dataset load failed: '+e.message, 'e'); setBusy(false); });
+  }, [apiOk]);
+
+  if (busy) return React.createElement('div', {className:'card', style:{marginTop:20}}, React.createElement(Spinner));
+
+  const cd = stats ? stats.class_distribution : {};
+  const total = stats ? stats.total_patients : 1000;
+  const filtered = filter==='All' ? rows : rows.filter(r => r.triage_level===filter);
+
+  return React.createElement('div', null,
+    React.createElement('div', {className:'g4', style:{marginBottom:18}},
+      [['Total Patients', total, 'Synthetic records', '--cyan'],
+       ['High', cd.High||'—', `${cd.High?((cd.High/total)*100).toFixed(1):'?'}% critical`, '--red'],
+       ['Medium', cd.Medium||'—', `${cd.Medium?((cd.Medium/total)*100).toFixed(1):'?'}% urgent`, '--amber'],
+       ['Low', cd.Low||'—', `${cd.Low?((cd.Low/total)*100).toFixed(1):'?'}% non-urgent`, '--green'],
+      ].map(([l,v,s,c],i) =>
+        React.createElement('div', {key:i, className:'tile'},
+          React.createElement('div', {className:'tile-accent', style:{background:`var(${c})`}}),
+          React.createElement('div', {className:'tile-lbl'}, l),
+          React.createElement('div', {className:'tile-val', style:{fontSize:22, paddingTop:4}}, v),
+          React.createElement('div', {className:'tile-sub'}, s)))),
+
+    rows.length > 0 && React.createElement('div', {className:'card'},
+      React.createElement('div', {style:{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:14}},
+        React.createElement('div', {className:'card-lbl', style:{marginBottom:0}},
+          React.createElement('div', {className:'card-lbl-bar', style:{background:'var(--cyan)'}}),
+          `Sample Records — /api/dataset/sample (${filtered.length} shown)`),
+        React.createElement('div', {style:{display:'flex', gap:6}},
+          ['All','High','Medium','Low'].map(f =>
+            React.createElement('button', {key:f, className:`btn-xs ${filter===f?'sel':''}`,
+              onClick:()=>setF(f)}, f)))),
+      React.createElement('div', {className:'tbl-wrap'},
+        React.createElement('table', {className:'dtbl'},
+          React.createElement('thead', null,
+            React.createElement('tr', null,
+              ['Age','Sex','HR','SBP','DBP','SpO₂','Temp','RR','GCS','Pain','Arrival','Complaint','Triage'].map(h =>
+                React.createElement('th', {key:h}, h)))),
+          React.createElement('tbody', null,
+            filtered.map((r,i) =>
+              React.createElement('tr', {key:i},
+                React.createElement('td', null, r.age),
+                React.createElement('td', null, r.sex),
+                React.createElement('td', {style:{color:r.heart_rate>140?'var(--red)':''}}, r.heart_rate),
+                React.createElement('td', {style:{color:r.systolic_bp<90?'var(--red)':''}}, r.systolic_bp),
+                React.createElement('td', null, r.diastolic_bp),
+                React.createElement('td', {style:{color:r.spo2<90?'var(--red)':''}}, r.spo2),
+                React.createElement('td', null, r.temperature_c),
+                React.createElement('td', null, r.resp_rate),
+                React.createElement('td', {style:{color:r.gcs<9?'var(--red)':''}}, r.gcs),
+                React.createElement('td', null, r.pain_score),
+                React.createElement('td', {style:{color:'var(--cyan)'}}, r.arrival_mode),
+                React.createElement('td', null, r.chief_complaint),
+                React.createElement('td', null, React.createElement(TBadge, {v:r.triage_level})))))
+        )
+      )),
+
+    rows.length === 0 && !busy && React.createElement('div', {className:'card c-box'},
+      React.createElement('div', {className:'empty-ico'}, '🗄️'),
+      React.createElement('div', {style:{fontSize:12, color:'var(--muted)'}}, 'Start backend to load dataset'))
+  );
+}
+
+/* ══════════════════════════════════════════════════════
+   ROOT APP
+   ══════════════════════════════════════════════════════ */
+function App() {
+  const [page, setPage]   = useState('predict');
+  const [model, setModel] = useState('random_forest');
+  const [apiOk, setApiOk] = useState(null);
+  const [toasts, setToasts] = useState([]);
+
+  useEffect(() => {
+    const check = async () => { setApiOk(await checkHealth()); };
+    check();
+    const id = setInterval(check, 6000);
+    return () => clearInterval(id);
+  }, []);
+
+  const toast = useCallback((msg, type='i') => {
+    const id = Date.now();
+    setToasts(t => [...t, {id, msg, type}]);
+    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 3500);
+  }, []);
+
+  const nav = [
+    {sec:'Application', items:[
+      {id:'predict',   ico:'🔍', lbl:'Triage Predict'},
+      {id:'analytics', ico:'📊', lbl:'Model Analytics'},
+    ]},
+    {sec:'Data', items:[
+      {id:'dataset', ico:'🗄️', lbl:'Dataset Explorer'},
+    ]},
+  ];
+
+  const titles = {predict:'Triage Prediction', analytics:'Model Analytics', dataset:'Dataset Explorer'};
+  // FIX: label correctly says :8080 (middleware) — previously said :5000 (backend)
+  // Browser connects to middleware at :8080; backend is internal at :5000
+  const apiLbl = apiOk===null ? 'Connecting…' : apiOk ? 'API Online · :8080→:5000' : 'API Offline';
+  const dotCls = apiOk===null ? 'spin' : apiOk ? 'live' : 'dead';
+
+  const props = {model, apiOk: !!apiOk, toast};
+
+  return React.createElement('div', {className:'shell'},
+    React.createElement('aside', {className:'sidebar'},
+      React.createElement('div', {className:'brand'},
+        React.createElement('div', {className:'brand-mark'},
+          React.createElement('div', {className:'brand-hex'}, '🏥'),
+          React.createElement('div', {className:'brand-name'}, 'ED Triage XAI')),
+        React.createElement('div', {className:'brand-sub'},
+          'An Explainable AI Web System for\nEmergency Patient Prioritisation')),
+      nav.map(g => React.createElement('div', {key:g.sec, className:'nav-sec'},
+        React.createElement('div', {className:'nav-sec-lbl'}, g.sec),
+        g.items.map(n => React.createElement('div', {key:n.id,
+          className:`nav-item ${page===n.id?'on':''}`,
+          onClick:()=>setPage(n.id)},
+          React.createElement('span', {className:'nav-ico'}, n.ico),
+          React.createElement('span', null, n.lbl))))),
+      React.createElement('div', {className:'sidebar-foot'},
+        React.createElement('div', {className:'api-card'},
+          React.createElement('div', {className:'api-row'},
+            React.createElement('div', {className:`api-dot ${dotCls}`}),
+            React.createElement('div', {className:'api-lbl'},
+              apiOk ? 'API Running' : apiOk===null ? 'Connecting…' : 'API Offline')),
+          /* FIX: now correctly shows :8080 (middleware) not :5000 (backend) */
+          React.createElement('div', {className:'api-url'}, 'middleware :8080 → backend :5000'))
+      )),
+
+    React.createElement('main', {className:'main'},
+      React.createElement('div', {className:'topbar'},
+        React.createElement('div', {className:'topbar-l'},
+          React.createElement('div', {className:'page-title'}, titles[page]),
+          React.createElement('div', {className:`live-chip ${apiOk?'':'off'}`},
+            React.createElement('div', {className:'live-chip-dot'}),
+            apiOk ? 'Connected' : 'Offline')),
+        React.createElement('div', {className:'topbar-r'},
+          React.createElement('div', {className:'model-sel-wrap'},
+            React.createElement('label', null, 'Model'),
+            React.createElement('select', {value:model, onChange:e=>setModel(e.target.value)},
+              [['logistic_regression','Logistic Regression'],
+               ['random_forest','Random Forest'],
+               ['gradient_boosting','Gradient Boosting']].map(([k,l]) =>
+                React.createElement('option', {key:k, value:k}, l)))))
+      ),
+      React.createElement('div', {className:'page'},
+        page==='predict'   ? React.createElement(PredictPage,  props) :
+        page==='analytics' ? React.createElement(AnalyticsPage, props) :
+                             React.createElement(DatasetPage,   props)
+      )),
+
+    React.createElement('div', {className:'toast-stack'},
+      toasts.map(t => React.createElement('div', {key:t.id, className:`toast ${t.type}`},
+        React.createElement('span', null, t.type==='s'?'✅':t.type==='e'?'❌':'ℹ️'),
+        React.createElement('span', null, t.msg))))
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+</script>
+</body>
+</html>
